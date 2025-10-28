@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Web Map GeoJSON</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+         integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+         crossorigin=""/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+         integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+         crossorigin=""></script>
+
+    <style>
+        /* 2. CSS Styling */
+        html, body {
+            height: 100%;
+            margin: 0;
+            font-family: Arial, sans-serif;
+        }
+        #map {
+            width: 100%;
+            height: 100%;
+        }
+        
+        /* --- กล่องควบคุม --- */
+        .control-panel {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            z-index: 1000; /* ให้ลอยเหนือแผนที่ */
+            background: white;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            box-shadow: 0 1px 5px rgba(0,0,0,0.2);
+            width: 250px; /* กำหนดความกว้าง */
+        }
+
+        .control-panel input[type="text"] {
+             width: calc(100% - 70px); /* ความกว้างช่องค้นหา (ลบปุ่ม) */
+        }
+        
+        /* --- (ใหม่) กล่องคำแนะนำ Autocomplete --- */
+        #suggestions-box {
+            display: none; /* เริ่มต้นด้วยการซ่อนไว้ */
+            background-color: #fff;
+            border: 1px solid #ddd;
+            max-height: 150px; /* จำกัดความสูง ถ้าผลลัพธ์เยอะ */
+            overflow-y: auto; /* ให้มี scrollbar */
+            
+            /* ทำให้ลอยอยู่ใต้ช่องค้นหา */
+            position: absolute; 
+            width: calc(100% - 22px); /* ความกว้างเกือบเท่ากล่องแม่ */
+            box-sizing: border-box; /* รวม padding/border ใน width */
+            z-index: 1001; /* ให้อยู่เหนือ control-panel */
+        }
+
+        .suggestion-item {
+            padding: 8px;
+            cursor: pointer;
+        }
+
+        .suggestion-item:hover {
+            background-color: #f0f0f0;
+        }
+
+    </style>
+</head>
+<body>
+
+    <div id="map"></div>
+
+    <div class="control-panel">
+        <h4>ค้นหาบ้านเลขที่</h4>
+        <input type="text" id="search-box" placeholder="ป้อนบ้านเลขที่..." autocomplete="off">
+        <button id="search-btn">ค้นหา</button>
+        
+        <div id="suggestions-box"></div>
+        
+        <div id="search-result" style="margin-top: 5px;"></div>
+    </div>
+
+    <script>
+        // 4. Initialize Map
+        var map = L.map('map').setView([13.7563, 100.5018], 10); // พิกัดเริ่มต้น
+
+        // แผนที่ถนน (OSM)
+        var osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        }).addTo(map);
+
+        // แผนที่ดาวเทียม (Esri)
+        var satelliteLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+            attribution: 'Tiles &copy; Esri'
+        });
+
+        // ตัวสลับแผนที่
+        var baseMaps = {
+            "แผนที่ถนน (OSM)": osmLayer,
+            "แผนที่ดาวเทียม": satelliteLayer
+        };
+        L.control.layers(baseMaps).addTo(map);
+
+        // --- ตัวแปรสำหรับ Logic การค้นหา ---
+        var geojsonLayer; 
+        var highlightedLayer;
+        var allHouseNumbers = []; // Array สำหรับเก็บรายการบ้านเลขที่ทั้งหมด
+        
+        // *** (สำคัญมาก) แก้ชื่อคอลัมน์บ้านเลขที่ให้ตรงกับไฟล์ .geojson ของคุณ ***
+        var propertyToSearch = 'name'; 
+        
+        // Element ที่ใช้บ่อย
+        var searchInput = document.getElementById('search-box');
+        var suggestionsBox = document.getElementById('suggestions-box');
+        var resultDiv = document.getElementById('search-result');
+        var searchButton = document.getElementById('search-btn');
+
+        // 5. Load GeoJSON from URL
+        // ------------------------------------
+        
+        // (สำคัญ) ชื่อไฟล์ .geojson ที่อยู่ใน Repository เดียวกัน
+        var geojsonURL = 'bui3.geojson'; 
+
+        fetch(geojsonURL)
+            .then(function(response) {
+                if (!response.ok) { throw new Error('Network response was not ok'); }
+                return response.json();
+            })
+            .then(function(geojsonData) {
+                
+                var houseNumberSet = new Set(); // ใช้ Set เพื่อกันข้อมูลซ้ำ
+
+                geojsonLayer = L.geoJSON(geojsonData, {
+                    onEachFeature: function (feature, layer) {
+                        var props = feature.properties;
+                        if (props) {
+                            // 1. เพิ่ม Popup (เหมือนเดิม)
+                            var popupContent = "";
+                            for (var k in props) {
+                                popupContent += "<b>" + k + "</b>: " + props[k] + "<br>";
+                            }
+                            layer.bindPopup(popupContent);
+
+                            // 2. (ใหม่) เพิ่มบ้านเลขที่ลงใน Set
+                            if (props[propertyToSearch]) {
+                                // เพิ่มทั้งแบบ String และตัดช่องว่าง
+                                houseNumberSet.add(String(props[propertyToSearch]).trim());
+                            }
+                        }
+                    }
+                }).addTo(map);
+
+                // (ใหม่) แปลง Set เป็น Array และเรียงลำดับ
+                allHouseNumbers = Array.from(houseNumberSet).sort(); 
+                
+                // ซูมไปที่ขอบเขตข้อมูล
+                map.fitBounds(geojsonLayer.getBounds());
+            })
+            .catch(function(error) {
+                console.error('Error loading GeoJSON:', error);
+                alert('ไม่สามารถโหลดข้อมูล GeoJSON ได้: ' + error.message);
+            });
+
+        // ------------------------------------
+        // 6. (ใหม่) Function ค้นหาและซูม (แยกออกมาเพื่อให้เรียกซ้ำได้)
+        // ------------------------------------
+        function findAndZoom(searchText) {
+            searchText = searchText.trim(); // ตัดช่องว่างก่อนค้นหา
+            if (!geojsonLayer) {
+                resultDiv.innerHTML = "ข้อมูลยังไม่พร้อม";
+                return;
+            }
+            if (!searchText) return;
+
+            // ลบไฮไลท์เก่า
+            if (highlightedLayer) {
+                geojsonLayer.resetStyle(highlightedLayer);
+            }
+
+            var found = false;
+            geojsonLayer.eachLayer(function(layer) {
+                if (layer.feature.properties && String(layer.feature.properties[propertyToSearch]).trim() === searchText) {
+                    
+                    // ไฮไลท์อันที่เจอ
+                    layer.setStyle({ weight: 3, color: 'red', fillOpacity: 0.5 });
+                    highlightedLayer = layer; // เก็บไว้ลบทีหลัง
+                    
+                    // ซูมไปหา
+                    map.fitBounds(layer.getBounds());
+                    
+                    // เปิด Popup
+                    layer.openPopup(); 
+                    
+                    resultDiv.innerHTML = "พบข้อมูล!";
+                    found = true;
+                    return; // หยุดค้นหาเมื่อเจอ
+                }
+            });
+
+            if (!found) {
+                resultDiv.innerHTML = "ไม่พบข้อมูลที่ตรงกัน";
+            }
+            
+            // ซ่อนกล่องคำแนะนำ
+            suggestionsBox.innerHTML = '';
+            suggestionsBox.style.display = 'none';
+        }
+
+        // ------------------------------------
+        // 7. Event Listeners สำหรับการค้นหา (Autocomplete)
+        // ------------------------------------
+
+        // --- เมื่อ "พิมพ์" ในช่องค้นหา (Event: 'input') ---
+        searchInput.addEventListener('input', function() {
+            var inputText = this.value.trim();
+            suggestionsBox.innerHTML = ''; // ล้างของเก่า
+
+            if (inputText.length === 0) {
+                suggestionsBox.style.display = 'none';
+                return;
+            }
+
+            // ค้นหาบ้านเลขที่ที่ "ขึ้นต้นด้วย" สิ่งที่พิมพ์
+            var suggestions = allHouseNumbers.filter(function(name) {
+                // ใช้ .startsWith() จะเร็วกว่า
+                return name.startsWith(inputText);
+            });
+
+            if (suggestions.length > 0) {
+                suggestionsBox.style.display = 'block'; // แสดงกล่อง
+                
+                // แสดงสูงสุด 10 รายการ
+                suggestions.slice(0, 10).forEach(function(suggestion) { 
+                    var item = document.createElement('div');
+                    item.className = 'suggestion-item';
+                    item.textContent = suggestion;
+                    
+                    // --- เมื่อ "คลิก" ที่คำแนะนำ (Event: 'click') ---
+                    item.addEventListener('click', function() {
+                        searchInput.value = this.textContent; // เติมข้อความในช่องค้นหา
+                        findAndZoom(this.textContent); // ค้นหาและซูมทันที
+                    });
+                    
+                    suggestionsBox.appendChild(item);
+                });
+            } else {
+                suggestionsBox.style.display = 'none'; // ซ่อน ถ้าไม่เจอ
+            }
+        });
+
+        // --- เมื่อ "กดปุ่มค้นหา" (Event: 'click') ---
+        searchButton.addEventListener('click', function() {
+            findAndZoom(searchInput.value);
+        });
+        
+        // --- เมื่อ "กด Enter" ในช่องค้นหา (Event: 'keydown') ---
+        searchInput.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') {
+                findAndZoom(this.value);
+            }
+        });
+
+        // --- (ใหม่) ซ่อนกล่องคำแนะนำเมื่อคลิกที่อื่นบนหน้าจอ ---
+        document.addEventListener('click', function(e) {
+            // ถ้าจุดที่คลิกไม่ใช่ช่องค้นหา และไม่ใช่กล่องคำแนะนำ
+            if (e.target !== searchInput && !suggestionsBox.contains(e.target)) {
+                suggestionsBox.style.display = 'none';
+            }
+        });
+
+    </script>
+
+</body>
+</html>
