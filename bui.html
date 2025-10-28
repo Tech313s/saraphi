@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Web Map GeoJSON</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+         integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+         crossorigin=""/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+         integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+         crossorigin=""></script>
+
+    <style>
+        /* 2. CSS Styling */
+        html, body {
+            height: 100%;
+            margin: 0;
+            font-family: Arial, sans-serif;
+        }
+        #map {
+            width: 100%;
+            height: 100%;
+        }
+        /* สร้างกล่องควบคุมแบบในภาพตัวอย่าง */
+        .control-panel {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            z-index: 1000;
+            background: white;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            box-shadow: 0 1px 5px rgba(0,0,0,0.2);
+        }
+        .control-panel input {
+            margin-bottom: 5px;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="map"></div>
+
+    <div class="control-panel">
+        <h4>นำเข้าไฟล์ GeoJSON</h4>
+        <input type="file" id="geojson-file" accept=".geojson">
+        
+        <hr>
+        <h4>ค้นหาบ้านเลขที่</h4>
+        <input type="text" id="search-box" placeholder="ป้อนบ้านเลขที่...">
+        <button id="search-btn">ค้นหา</button>
+        <div id="search-result"></div>
+    </div>
+
+    <script>
+        // 4. Initialize Map
+        var map = L.map('map').setView([13.7563, 100.5018], 10); // ตั้งค่าพิกัดเริ่มต้น (กรุงเทพ)
+
+        // Add OpenStreetMap Base Layer (แบบเดียวกับในภาพ)
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        }).addTo(map);
+        // ... (ส่วนที่ 4. Initialize Map) ...
+
+// Add OpenStreetMap Base Layer (แผนที่ถนน)
+var osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+}).addTo(map); // ให้ตัวนี้เป็นตัวเริ่มต้น
+
+// === เพิ่มส่วนนี้ ===
+// Add Satellite Base Layer (แผนที่ดาวเทียม)
+var satelliteLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+    attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
+});
+// ... (ต่อจากโค้ดด้านบน) ...
+
+// === เพิ่มส่วนนี้ ===
+// สร้าง Object สำหรับเก็บ Base Maps
+var baseMaps = {
+    "แผนที่ถนน (OSM)": osmLayer,
+    "แผนที่ดาวเทียม": satelliteLayer
+};
+
+// เพิ่มตัวควบคุมการสลับชั้นข้อมูล (ปุ่มสลับขวาบน)
+L.control.layers(baseMaps).addTo(map);
+// === สิ้นสุดส่วนที่เพิ่ม ===
+// === สิ้นสุดส่วนที่เพิ่ม ===
+
+        var geojsonLayer; // ตัวแปรสำหรับเก็บ Layer ที่นำเข้า
+        var highlightedLayer; // ตัวแปรสำหรับเก็บ Layer ที่ไฮไลท์
+
+        // 5. Handle GeoJSON File Import
+        document.getElementById('geojson-file').addEventListener('change', function(e) {
+            var file = e.target.files[0];
+            if (!file) {
+                return;
+            }
+
+            var reader = new FileReader();
+            reader.onload = function(e) {
+                var contents = e.target.result;
+                try {
+                    var geojsonData = JSON.parse(contents);
+                    
+                    // ลบ Layer เก่า (ถ้ามี)
+                    if (geojsonLayer) {
+                        map.removeLayer(geojsonLayer);
+                    }
+
+                    // สร้าง Layer ใหม่
+                    geojsonLayer = L.geoJSON(geojsonData, {
+                        onEachFeature: function (feature, layer) {
+                            // เพิ่ม Popup ให้คลิกดูข้อมูลได้
+                            if (feature.properties) {
+                                var popupContent = "";
+                                for (var k in feature.properties) {
+                                    popupContent += k + ": " + feature.properties[k] + "<br>";
+                                }
+                                layer.bindPopup(popupContent);
+                            }
+                        }
+                    }).addTo(map);
+
+                    // ซูมไปยังขอบเขตของข้อมูลที่นำเข้า
+                    map.fitBounds(geojsonLayer.getBounds());
+
+                } catch (err) {
+                    alert("ไม่สามารถอ่านไฟล์ GeoJSON ได้: " + err.message);
+                }
+            };
+            reader.readAsText(file);
+        });
+
+        // 6. Handle Search
+        document.getElementById('search-btn').addEventListener('click', function() {
+            var searchText = document.getElementById('search-box').value.trim();
+            var resultDiv = document.getElementById('search-result');
+            
+            if (!geojsonLayer) {
+                resultDiv.innerHTML = "โปรดนำเข้าไฟล์ GeoJSON ก่อน";
+                return;
+            }
+            if (searchText === "") {
+                resultDiv.innerHTML = "โปรดป้อนคำค้นหา";
+                return;
+            }
+
+            // ลบไฮไลท์เก่า (ถ้ามี)
+            if (highlightedLayer) {
+                geojsonLayer.resetStyle(highlightedLayer);
+            }
+
+            var found = false;
+            // **สำคัญ:** ต้องแก้ 'HOUSE_NO' ให้ตรงกับชื่อ property ในไฟล์ .geojson ของคุณ
+            var propertyToSearch = 'hs_no'; 
+
+            geojsonLayer.eachLayer(function(layer) {
+                if (layer.feature.properties && layer.feature.properties[propertyToSearch]) {
+                    
+                    var propValue = String(layer.feature.properties[propertyToSearch]);
+                    
+                    // ค้นหาแบบตรงตัว
+                    if (propValue === searchText) {
+                        
+                        // ไฮไลท์ Layer ที่เจอ
+                        layer.setStyle({
+                            weight: 3,
+                            color: 'red',
+                            fillOpacity: 0.5
+                        });
+                        highlightedLayer = layer; // เก็บไว้ลบทีหลัง
+
+                        // ซูมไปยัง Layer ที่เจอ
+                        map.fitBounds(layer.getBounds());
+                        
+                        // เปิด Popup
+                        layer.openPopup(); 
+
+                        resultDiv.innerHTML = "พบข้อมูล!";
+                        found = true;
+                        return; // หยุดค้นหาเมื่อเจอ
+                    }
+                }
+            });
+
+            if (!found) {
+                resultDiv.innerHTML = "ไม่พบข้อมูลที่ตรงกัน";
+            }
+        });
+
+    </script>
+
+</body>
+</html>
